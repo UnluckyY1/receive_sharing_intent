@@ -113,7 +113,8 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
     private fun handleIntent(intent: Intent, initial: Boolean) {
         when {
             (intent.type?.startsWith("text") != true)
-                    && (intent.action == Intent.ACTION_SEND
+                    && (intent.action == Intent.ACTION_VIEW
+                    || intent.action == Intent.ACTION_SEND
                     || intent.action == Intent.ACTION_SEND_MULTIPLE) -> { // Sharing images or videos
 
                 val value = getMediaUris(intent)
@@ -128,12 +129,6 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
                 latestText = value
                 eventSinkText?.success(latestText)
             }
-            intent.action == Intent.ACTION_VIEW -> { // Opening URL
-                val value = intent.dataString
-                if (initial) initialText = value
-                latestText = value
-                eventSinkText?.success(latestText)
-            }
         }
     }
 
@@ -141,6 +136,22 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
         if (intent == null) return null
 
         return when (intent.action) {
+            Intent.ACTION_VIEW -> {
+                val uri = Uri.parse(intent.dataString)
+                val path = uri?.let{ FileDirectory.getAbsolutePath(applicationContext, it) }
+                if (path != null) {
+                    val type = getMediaType(path)
+                    val thumbnail = getThumbnail(path, type)
+                    val duration = getDuration(path, type)
+                    JSONArray().put(
+                            JSONObject()
+                                    .put("path", path)
+                                    .put("type", type.ordinal)
+                                    .put("thumbnail", thumbnail)
+                                    .put("duration", duration)
+                    )
+                } else null
+            }
             Intent.ACTION_SEND -> {
                 val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
                 val path = uri?.let{ FileDirectory.getAbsolutePath(applicationContext, it) }
