@@ -1,6 +1,6 @@
 import Flutter
 import UIKit
-import Photos
+import Foundation
 
 public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     static let kMessagesChannel = "receive_sharing_intent/messages";
@@ -91,48 +91,78 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
     
     // Handle the shared URL and use security-scoped resource
     private func handleUrl(url: URL, setInitialData: Bool) -> Bool {
-        if url.isFileURL {
-            // Security-Scoped URL access
-            if url.startAccessingSecurityScopedResource() {
-                defer { url.stopAccessingSecurityScopedResource() }
-                
-                // Now it's safe to access the file
-                let sourcePath = getAbsolutePath(for: url.path)
-                
-                // Define the destination path in your app's temp folder
-                let fileManager = FileManager.default
-                let tempDirectoryURL = fileManager.temporaryDirectory
-                let fileName = url.lastPathComponent
-                let destinationURL = tempDirectoryURL.appendingPathComponent(fileName)
-                
-                // Copy the file to the app's temp directory
+    if url.isFileURL {
+        // Security-Scoped URL access
+        if url.startAccessingSecurityScopedResource() {
+            defer {
+                // Stop accessing the resource when done
+                url.stopAccessingSecurityScopedResource()
+            }
+            
+            // Now it's safe to access the file
+            let sourcePath = getAbsolutePath(for: url.path)
+            let fileManager = FileManager.default
+            let tempDirectoryURL = fileManager.temporaryDirectory
+            let fileName = url.lastPathComponent
+            let destinationURL = tempDirectoryURL.appendingPathComponent(fileName)
+            
+            // Ensure the destination directory exists
+            if !fileManager.fileExists(atPath: tempDirectoryURL.path) {
                 do {
-                    if !fileManager.fileExists(atPath: destinationURL.path) {
-                        try fileManager.copyItem(at: url, to: destinationURL)
-                    }
-                    
-                    // Update the latest media to point to the copied file
-                    latestMedia = [SharedMediaFile(path: destinationURL.path, thumbnail: nil, duration: nil, type: .file)]
-                    
-                    if setInitialData {
-                        initialMedia = latestMedia
-                    }
-                    
-                    eventSinkMedia?(toJson(data: latestMedia))
+                    try fileManager.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true, attributes: nil)
                 } catch {
-                    // Handle file copy error
-                    print("Error copying file: \(error.localizedDescription)")
+                    print("Error creating directory: \(error.localizedDescription)")
                     return false
                 }
-            } else {
-                // Handle error if you cannot access the file
-                print("Failed to access security-scoped resource")
             }
+
+
+            // Workaround to avoid file exceptions (read permission errors) when trying to read the file in Dart code.
+            // By copying the file to a temp directory that the app has direct access to, we avoid running into security-scoped resource issues.
+            // The Dart code will then have consistent access to the file, bypassing the need for security-scoped resource access.
+            // Perform the file copy on a background queue to avoid blocking the main thread
+            DispatchQueue.global(qos: .background).async {
+                do {
+                    // If file exists, remove it before copying
+                    if fileManager.fileExists(atPath: destinationURL.path) {
+                        try fileManager.removeItem(at: destinationURL)
+                    }
+                    
+                    // Copy the file to the destination
+                    try fileManager.copyItem(at: url, to: destinationURL)
+                    
+                    // Update the latest media to point to the copied file
+                    DispatchQueue.main.async {
+                        self.latestMedia = [SharedMediaFile(path: destinationURL.path, thumbnail: nil, duration: nil, type: .file)]
+                        
+                        if setInitialData {
+                            self.initialMedia = self.latestMedia
+                        }
+                        
+                        self.eventSinkMedia?(toJson(data: self.latestMedia))
+                    }
+                    
+                } catch {
+                    // Handle file copy or deletion error on the background thread
+                    DispatchQueue.main.async {
+                        print("Error copying or removing file: \(error.localizedDescription)")
+                    }
+                }
+            }
+            
+            return true
+        } else {
+            // Handle error if you cannot access the file
+            print("Failed to access security-scoped resource")
+            return false
         }
-        latestMedia = nil
-        latestText = nil
-        return true
     }
+    
+    latestMedia = nil
+    latestText = nil
+    return true // Successful file handling
+}
+
     
     public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         if (arguments as! String? == "media") {
