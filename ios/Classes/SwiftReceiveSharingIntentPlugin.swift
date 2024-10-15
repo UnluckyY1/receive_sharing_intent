@@ -35,7 +35,6 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
     }
     
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        
         switch call.method {
         case "getInitialMedia":
             result(toJson(data: self.initialMedia));
@@ -64,7 +63,7 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
                 return handleUrl(url: url, setInitialData: true)
             }
         }
-        
+
         return true
     }
     
@@ -90,17 +89,49 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
         return false
     }
     
+    // Handle the shared URL and use security-scoped resource
     private func handleUrl(url: URL, setInitialData: Bool) -> Bool {
-        if (url.isFileURL) {
-            latestMedia = [SharedMediaFile.init(path: getAbsolutePath(for: url.path), thumbnail: nil, duration: nil, type: .file)]
-            if(setInitialData) {
-                initialMedia = latestMedia
+        if url.isFileURL {
+            // Security-Scoped URL access
+            if url.startAccessingSecurityScopedResource() {
+                defer { url.stopAccessingSecurityScopedResource() }
+                
+                // Now it's safe to access the file
+                let sourcePath = getAbsolutePath(for: url.path)
+                
+                // Define the destination path in your app's temp folder
+                let fileManager = FileManager.default
+                let tempDirectoryURL = fileManager.temporaryDirectory
+                let fileName = url.lastPathComponent
+                let destinationURL = tempDirectoryURL.appendingPathComponent(fileName)
+                
+                // Copy the file to the app's temp directory
+                do {
+                    if !fileManager.fileExists(atPath: destinationURL.path) {
+                        try fileManager.copyItem(at: url, to: destinationURL)
+                    }
+                    
+                    // Update the latest media to point to the copied file
+                    latestMedia = [SharedMediaFile(path: destinationURL.path, thumbnail: nil, duration: nil, type: .file)]
+                    
+                    if setInitialData {
+                        initialMedia = latestMedia
+                    }
+                    
+                    eventSinkMedia?(toJson(data: latestMedia))
+                } catch {
+                    // Handle file copy error
+                    print("Error copying file: \(error.localizedDescription)")
+                    return false
+                }
+            } else {
+                // Handle error if you cannot access the file
+                print("Failed to access security-scoped resource")
             }
-            eventSinkMedia?(toJson(data: latestMedia))
         }
         latestMedia = nil
         latestText = nil
-        return false
+        return true
     }
     
     public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
@@ -146,7 +177,7 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
         var thumbnail: String?; // video thumbnail
         var duration: Double?; // video duration in milliseconds
         var type: SharedMediaType;
-        
+
         
         init(path: String, thumbnail: String?, duration: Double?, type: SharedMediaType) {
             self.path = path
