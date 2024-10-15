@@ -66,104 +66,106 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
 
         return true
     }
-    
     // This is the function called on resuming the app from a shared link.
     // It handles requests to open a resource by a specified URL. Returning true means that it was handled successfully, false means the attempt to open the resource failed.
     // If the URL includes the module's ShareMedia prefix, then we process the URL and return true if we know how to handle that kind of URL or false if we are not able to.
     // If the URL does not include the module's prefix, then we return false to indicate our module's attempt to open the resource failed and others should be allowed to.
     // Reference: https://developer.apple.com/documentation/uikit/uiapplicationdelegate/1623112-application
+    
     public func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
         return handleUrl(url: url, setInitialData: true)
     }
-    
     // This function is called by other modules like Firebase DeepLinks.
     // It tells the delegate that data for continuing an activity is available. Returning true means that our module handled the activity and that others do not have to. Returning false tells
     // iOS that our app did not handle the activity.
     // If the URL includes the module's ShareMedia prefix, then we process the URL and return true if we know how to handle that kind of URL or false if we are not able to.
     // If the URL does not include the module's prefix, then we must return false to indicate that this module did not handle the prefix and that other modules should try to.
     // Reference: https://developer.apple.com/documentation/uikit/uiapplicationdelegate/1623072-application
+    
     public func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([Any]) -> Void) -> Bool {
         if let url = userActivity.webpageURL {
             return handleUrl(url: url, setInitialData: true)
         }
         return false
     }
-    
+
     // Handle the shared URL and use security-scoped resource
     private func handleUrl(url: URL, setInitialData: Bool) -> Bool {
-    if url.isFileURL {
-        // Security-Scoped URL access
-        if url.startAccessingSecurityScopedResource() {
-            defer {
-                // Stop accessing the resource when done
-                url.stopAccessingSecurityScopedResource()
-            }
-            
-            // Now it's safe to access the file
-            let sourcePath = getAbsolutePath(for: url.path)
-            let fileManager = FileManager.default
-            let tempDirectoryURL = fileManager.temporaryDirectory
-            let fileName = url.lastPathComponent
-            let destinationURL = tempDirectoryURL.appendingPathComponent(fileName)
-            
-            // Ensure the destination directory exists
-            if !fileManager.fileExists(atPath: tempDirectoryURL.path) {
-                do {
-                    try fileManager.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true, attributes: nil)
-                } catch {
-                    print("Error creating directory: \(error.localizedDescription)")
-                    return false
+        if url.isFileURL {
+            // Security-Scoped URL access
+            if url.startAccessingSecurityScopedResource() {
+                defer {
+                    // Stop accessing the resource when done
+                    url.stopAccessingSecurityScopedResource()
                 }
-            }
-
-
-            // Workaround to avoid file exceptions (read permission errors) when trying to read the file in Dart code.
-            // By copying the file to a temp directory that the app has direct access to, we avoid running into security-scoped resource issues.
-            // The Dart code will then have consistent access to the file, bypassing the need for security-scoped resource access.
-            // Perform the file copy on a background queue to avoid blocking the main thread
-            DispatchQueue.global(qos: .background).async {
-                do {
-                    // If file exists, remove it before copying
-                    if fileManager.fileExists(atPath: destinationURL.path) {
-                        try fileManager.removeItem(at: destinationURL)
+                
+                // Now it's safe to access the file
+                let sourcePath = getAbsolutePath(for: url.path)
+                let fileManager = FileManager.default
+                let tempDirectoryURL = fileManager.temporaryDirectory
+                let fileName = url.lastPathComponent
+                let destinationURL = tempDirectoryURL.appendingPathComponent(fileName)
+                
+                // Ensure the destination directory exists
+                if !fileManager.fileExists(atPath: tempDirectoryURL.path) {
+                    do {
+                        try fileManager.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true, attributes: nil)
+                    } catch {
+                        print("Error creating directory: \(error.localizedDescription)")
+                        return false
                     }
+                }
+
+                // Workaround to avoid file exceptions (read permission errors) when trying to read the file in Dart code.
+                // By copying the file to a temp directory that the app has direct access to, we avoid running into security-scoped resource issues.
+                // The Dart code will then have consistent access to the file, bypassing the need for security-scoped resource access.
+                // Perform the file copy on a background queue to avoid blocking the main thread
+                DispatchQueue.global(qos: .background).async { [weak self] in
+                    guard let self = self else { return }
                     
-                    // Copy the file to the destination
-                    try fileManager.copyItem(at: url, to: destinationURL)
-                    
-                    // Update the latest media to point to the copied file
-                    DispatchQueue.main.async {
-                        self.latestMedia = [SharedMediaFile(path: destinationURL.path, thumbnail: nil, duration: nil, type: .file)]
-                        
-                        if setInitialData {
-                            self.initialMedia = self.latestMedia
+                    do {
+                        // If file exists, remove it before copying
+                        if fileManager.fileExists(atPath: destinationURL.path) {
+                            try fileManager.removeItem(at: destinationURL)
                         }
                         
-                        self.eventSinkMedia?(toJson(data: self.latestMedia))
-                    }
-                    
-                } catch {
-                    // Handle file copy or deletion error on the background thread
-                    DispatchQueue.main.async {
-                        print("Error copying or removing file: \(error.localizedDescription)")
+                        // Copy the file to the destination
+                        try fileManager.copyItem(at: url, to: destinationURL)
+                        
+                        // Update the latest media to point to the copied file
+                        DispatchQueue.main.async {
+                            self.latestMedia = [SharedMediaFile(path: destinationURL.path, thumbnail: nil, duration: nil, type: .file)]
+                            
+                            if setInitialData {
+                                self.initialMedia = self.latestMedia
+                            }
+                            
+                            self.eventSinkMedia?(self.toJson(data: self.latestMedia))
+                        }
+                        
+                    } catch {
+                        // Handle file copy or deletion error on the background thread
+                        DispatchQueue.main.async {
+                            print("Error copying or removing file: \(error.localizedDescription)")
+                        }
                     }
                 }
+                
+                return true
+            } else {
+                // Handle error if you cannot access the file
+                print("Failed to access security-scoped resource")
+                return false
             }
-            
-            return true
-        } else {
-            // Handle error if you cannot access the file
-            print("Failed to access security-scoped resource")
-            return false
         }
+        
+        latestMedia = nil
+        latestText = nil
+        return true // Successful file handling
     }
-    
-    latestMedia = nil
-    latestText = nil
-    return true // Successful file handling
-}
 
-    
+
+
     public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         if (arguments as! String? == "media") {
             eventSinkMedia = events;
@@ -198,7 +200,7 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
             return nil
         }
         let encodedData = try? JSONEncoder().encode(data)
-         let json = String(data: encodedData!, encoding: .utf8)!
+        let json = String(data: encodedData!, encoding: .utf8)!
         return json
     }
     
